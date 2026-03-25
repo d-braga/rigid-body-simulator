@@ -1,1 +1,2 @@
-# rigid-body-simulator
+# Rigid Body Simulator
+
