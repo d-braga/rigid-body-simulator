@@ -1,0 +1,15 @@
+# Executáveis
+simulador
+*.exe
+*.out
+
+# Pastas de Bibliotecas Locais (Linux e Windows)
+lib_linux/
+lib/
+
+# Arquivos Binários e Objetos
+*.a
+*.so
+*.so.*
+*.dll
+*.o
