@@ -5,8 +5,8 @@
 #include "body.h"
 #include <vector>
 
-const int   SCREEN_WIDTH  = 800;
-const int   SCREEN_HEIGHT = 450;
+const int   SCREEN_WIDTH  = 1500;
+const int   SCREEN_HEIGHT = 700;
 const float GRAVITY       = 500.0f;
 const float GROUND_Y      = SCREEN_HEIGHT - 20.0f;
 

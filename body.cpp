@@ -66,12 +66,12 @@ float Circumference::getRadius() const { return radius; }
 // ─────────────────────────────────────────
 
 RigidRect::RigidRect(Vector2 pos, float width, float height, float mass,
-                     float restitution, float friction, bool isStatic)
+                     float restitution, float friction, bool isStatic, Color cor)
     : Body(pos, mass, restitution, friction, isStatic),
-      width(width), height(height) {}
+      width(width), height(height), cor(cor) {}
 
 void RigidRect::draw() const {
-    DrawRectangleV({pos.x - width/2, pos.y - height/2}, {width, height}, BLUE);
+    DrawRectangleV({pos.x - width/2, pos.y - height/2}, {width, height}, this->cor);
 }
 
 float RigidRect::area() const {

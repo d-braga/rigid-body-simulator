@@ -73,7 +73,7 @@ static void projectCircle(Vector2 center, float radius, Vector2 axis,
 // ═══════════════════════════════════════════════
 
 Simulation::Simulation() : paused(false), showInfo(true) {
-    InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Rigid Body Simulator");
+    InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Simulador de Corpos Rígidos :)");
     SetTargetFPS(60);
     spawnStaticGround();
 }
@@ -128,7 +128,7 @@ void Simulation::handleInput() {
     if (IsKeyPressed(KEY_I)) showInfo = !showInfo;
 
     if (IsKeyPressed(KEY_C)) {
-        for (int i = 1; i < (int)bodies.size(); i++) delete bodies[i];
+        for (int i = 1; i < (int)bodies.size(); i++) delete bodies[i]; //i==0 é o chão (rigRectangle), por isso não apago ele.
         bodies.erase(bodies.begin() + 1, bodies.end());
     }
 }
@@ -152,7 +152,7 @@ void Simulation::spawnTriangle(Vector2 pos) {
 void Simulation::spawnStaticGround() {
     Vector2 gp = { SCREEN_WIDTH / 2.0f, GROUND_Y + 10.0f };
     bodies.push_back(new RigidRect(gp, (float)SCREEN_WIDTH, 20.0f,
-                                   0.0f, 0.5f, 0.3f, true));
+                                   0.0f, 0.5f, 0.3f, true, PURPLE)); //massa zero para não participar da física.
 }
 
 // ═══════════════════════════════════════════════
@@ -162,21 +162,21 @@ void Simulation::spawnStaticGround() {
 void Simulation::applyGravity(float dt) {
     for (Body* b : bodies)
         if (!b->getIsStatic())
-            b->applyForce({0.0f, GRAVITY * b->getMass()});
+            b->applyForce({0.0f, GRAVITY * b->getMass()}); //note que estamos lidando com ponteiros para objetos, por isso o ->
 }
 
 void Simulation::resolveGroundCollision(Body* body) {
     if (body->getIsStatic()) return;
 
-    if (Circumference* c = dynamic_cast<Circumference*>(body)) {
+    if (Circumference* c = dynamic_cast<Circumference*>(body)) { //casting de um ponteiro de um objeto da classe body para classe circunferencia em tempo de execução para usar atributos da circunferencia
         float bottom = c->getPos().y + c->getRadius();
         if (bottom >= GROUND_Y) {
             Vector2 p = c->getPos();
-            p.y = GROUND_Y - c->getRadius();
+            p.y = GROUND_Y - c->getRadius(); // só atualizo y do p, o x continua igual ao x do c.
             c->setPos(p);
             Vector2 v = c->getSpeed();
-            v.y = -v.y * c->getRestitution();
-            v.x *=  1.0f - c->getFriction();
+            v.y = -v.y * c->getRestitution(); //teoria de colisões. Dem.: Qualquer livro de física.
+            v.x *=  1.0f - c->getFriction(); //atenção no *=
             c->setSpeed(v);
         }
         return;
@@ -209,6 +209,7 @@ void Simulation::resolveGroundCollision(Body* body) {
     }
 }
 
+// colisão com as 'paredes' da janela
 void Simulation::resolveWallCollision(Body* body) {
     if (body->getIsStatic()) return;
 
@@ -254,9 +255,9 @@ void Simulation::resolveWallCollision(Body* body) {
     }
 }
 
-// ═══════════════════════════════════════════════
-//  Detecção de colisão (SAT)
-// ═══════════════════════════════════════════════
+// ═══════════════════════════════════════════════════
+//  Detecção de colisão - Teorema dos Eixos Paralelos
+// ═══════════════════════════════════════════════════
 
 CollisionInfo Simulation::detectCircleCircle(Circumference* a, Circumference* b) {
     CollisionInfo info;

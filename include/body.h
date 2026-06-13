@@ -56,9 +56,10 @@ public:
 class RigidRect : public Body {      // renomeado para evitar conflito com raylib
 private:
     float width, height;
+    Color cor;
 public:
     RigidRect(Vector2 pos, float width, float height, float mass,
-              float restitution = 0.5f, float friction = 0.3f, bool isStatic = false);
+              float restitution = 0.5f, float friction = 0.3f, bool isStatic = false, Color cor=BLUE);
 
     void  draw()    const override;
     float area()    const override;
