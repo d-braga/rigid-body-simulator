@@ -118,14 +118,30 @@ void Simulation::run() {
 // ═══════════════════════════════════════════════
 
 void Simulation::handleInput() {
-    Vector2 mouse = GetMousePosition();
+   Vector2 mouse = GetMousePosition();
+    if(IsMouseButtonDown(MOUSE_BUTTON_LEFT)){
+        time+=0.1;
 
-    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))   spawnCircle(mouse);
+ 
+    }
+    if(IsMouseButtonReleased(MOUSE_BUTTON_LEFT)){
+        spawnCircle(mouse);
+        time =0;
+
+    }
+     
     if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT))  spawnRectangle(mouse);
-    if (IsMouseButtonPressed(MOUSE_BUTTON_MIDDLE)) spawnTriangle(mouse);
+    if (IsMouseButtonDown(MOUSE_BUTTON_MIDDLE)){
+        time+=0.1;
+    } 
+    if(IsMouseButtonReleased(MOUSE_BUTTON_MIDDLE)){
+        spawnTriangle(mouse);
+        time =0;
+    }
 
     if (IsKeyPressed(KEY_P)) paused = !paused;
     if (IsKeyPressed(KEY_I)) showInfo = !showInfo;
+
 
     if (IsKeyPressed(KEY_C)) {
         for (int i = 1; i < (int)bodies.size(); i++) delete bodies[i]; //i==0 é o chão (rigRectangle), por isso não apago ele.
@@ -138,7 +154,8 @@ void Simulation::handleInput() {
 // ═══════════════════════════════════════════════
 
 void Simulation::spawnCircle(Vector2 pos) {
-    bodies.push_back(new Circumference(pos, 20.0f, 1.0f));
+   float x = 20.0*(1+time);
+    bodies.push_back(new Circumference(pos, x, 1.0f));
 }
 
 void Simulation::spawnRectangle(Vector2 pos) {
@@ -146,7 +163,8 @@ void Simulation::spawnRectangle(Vector2 pos) {
 }
 
 void Simulation::spawnTriangle(Vector2 pos) {
-    bodies.push_back(new Triangle(pos, 50.0f, 1.0f));
+    float x = 10.0*(1+time);
+    bodies.push_back(new Triangle(pos, x, 1.0f));
 }
 
 void Simulation::spawnStaticGround() {
