@@ -141,41 +141,64 @@ void Simulation::run() {
 void Simulation::handleInput() {
     Vector2 mouse = GetMousePosition();
 
-    // ── 1. CLIQUE INICIAL: Tenta selecionar um corpo existente ──
+    // ── 1. CLIQUE INICIAL: Seleciona um corpo existente ──
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
         draggedBody = nullptr;
 
-        // Varre de trás para frente para selecionar o corpo que está visualmente "no topo"
         for (int i = (int)bodies.size() - 1; i >= 0; --i) {
+            // Passa a variável 'mouse' atualizada para a função auxiliar
             if (isPointInsideBody(mouse, bodies[i])) {
                 draggedBody = bodies[i];
                 draggedBodyOldStatic = draggedBody->getIsStatic();
 
-                // Torna temporariamente estático para parar a gravidade e forças físicas externas
+                // Torna temporariamente estático para não sofrer ação da gravidade no arrasto
                 draggedBody->setStatic(true);
                 draggedBody->setSpeed({ 0.0f, 0.0f });
                 draggedBody->setAngularSpeed(0.0f);
-                break; // Encontrou um, não precisa testar o resto
+                break;
             }
         }
     }
 
-    // ── 2. SEGURANDO O MOUSE: Move livremente o corpo selecionado ──
+    // ── 2. SEGURANDO O MOUSE: Atualiza posição ──
     if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && draggedBody != nullptr) {
         draggedBody->setPos(mouse);
-        draggedBody->setSpeed({ 0.0f, 0.0f }); // Garante que não acumule velocidade fantasma pelo movimento
+
+        // Mantemos a velocidade zerada durante o arrasto para evitar detecções fantasmas,
+        // mas a posição está a mudar quadro a quadro acompanhando o cursor do rato.
+        draggedBody->setSpeed({ 0.0f, 0.0f });
         draggedBody->setAngularSpeed(0.0f);
     }
 
-    // ── 3. SOLTANDO O MOUSE: Devolve o corpo para a simulação física ──
+    // ── 3. SOLTANDO O MOUSE: Calcula o momento e lança o objeto ──
     if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT) && draggedBody != nullptr) {
-        // Restaura o estado estático original que o corpo tinha antes do clique
+        // Restaura o estado estático original do objeto
         draggedBody->setStatic(draggedBodyOldStatic);
 
-        // Opcional: Se quiser que o objeto seja "arremessado" com base no movimento do mouse,
-        // você poderia calcular a velocidade aqui através do GetMouseDelta().
+        if (!draggedBody->getIsStatic()) {
+            float dt = GetFrameTime();
 
-        draggedBody = nullptr; // Limpa o ponteiro
+            if (dt > 0.0f) {
+                // GetMouseDelta() dá o deslocamento do mouse desde o frame passado
+                Vector2 mouseDelta = GetMouseDelta();
+
+                // Velocidade = Espaço / Tempo (pixels por segundo)
+                Vector2 launchVelocity = { mouseDelta.x / dt, mouseDelta.y / dt };
+
+                // Conservação parcial do momento do lançamento (85%)
+                float momentumMultiplier = 0.85f;
+                launchVelocity = Vector2Scale(launchVelocity, momentumMultiplier);
+
+                // Aplica a velocidade linear de lançamento ao bloco
+                draggedBody->setSpeed(launchVelocity);
+
+                // Adiciona velocidade angular baseada na velocidade horizontal do lançamento
+                float angularFactor = launchVelocity.x * 0.01f;
+                draggedBody->setAngularSpeed(angularFactor);
+            }
+        }
+
+        draggedBody = nullptr;
     }
 
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))   spawnCircle(mouse);
