@@ -23,6 +23,7 @@ private:
     bool paused;
     bool showInfo;
 
+
     // ── física ──────────────────────────────────
     void applyGravity(float dt);
     void resolveGroundCollision(Body* body);
@@ -45,6 +46,8 @@ private:
 
     // ── input ────────────────────────────────────
     void handleInput();
+    Body* draggedBody;
+    bool draggedBodyOldStatic;
 
     // ── desenho ─────────────────────────────────
     void drawBodies()  const;

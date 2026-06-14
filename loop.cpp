@@ -8,6 +8,10 @@
 //  Funções auxiliares de geometria (livres)
 // ═══════════════════════════════════════════════
 
+inline float CrossProduct2D(Vector2 a, Vector2 b) {
+    return a.x * b.y - a.y * b.x;
+}
+
 static Vector2 v2Norm(Vector2 v) {
     float len = sqrtf(v.x*v.x + v.y*v.y);
     if (len < 1e-8f) return {0.0f, 0.0f};
@@ -50,29 +54,46 @@ static std::vector<Vector2> polyAxes(const std::vector<Vector2>& v) {
 }
 
 // projeção de polígono num eixo
-static void projectPoly(const std::vector<Vector2>& v, Vector2 axis,
-                         float& mn, float& mx) {
-    mn = mx = v2Dot(v[0], axis);
-    for (auto& p : v) {
-        float d = v2Dot(p, axis);
-        mn = std::min(mn, d);
-        mx = std::max(mx, d);
+static void projectPoly(const std::vector<Vector2>& vtx, Vector2 axis, float& minProj, float& maxProj) {
+    minProj = Vector2DotProduct(vtx[0], axis);
+    maxProj = minProj;
+    for (size_t i = 1; i < vtx.size(); ++i) {
+        float dot = Vector2DotProduct(vtx[i], axis);
+        if (dot < minProj) minProj = dot;
+        if (dot > maxProj) maxProj = dot;
     }
 }
 
 // projeção de círculo num eixo
-static void projectCircle(Vector2 center, float radius, Vector2 axis,
-                           float& mn, float& mx) {
-    float proj = v2Dot(center, axis);
-    mn = proj - radius;
-    mx = proj + radius;
+static void projectCircle(Vector2 center, float radius, Vector2 axis, float& minProj, float& maxProj) {
+    float projection = Vector2DotProduct(center, axis);
+    minProj = projection - radius;
+    maxProj = projection + radius;
+}
+
+// Função auxiliar para verificar se o ponto do mouse está dentro de um polígono ou círculo
+bool isPointInsideBody(Vector2 point, Body* body) {
+    // Se for um círculo
+    Circumference* circ = dynamic_cast<Circumference*>(body);
+    if (circ) {
+        return CheckCollisionPointCircle(point, body->getPos(), circ->getRadius());
+    }
+
+    // Se for um polígono (Quadrado ou Triângulo), usamos os vértices reais rotacionados
+    std::vector<Vector2> vertices = body->getVertices();
+    if (!vertices.empty()) {
+        // CheckCollisionPointPoly é uma função nativa da Raylib (incluída em raylib.h)
+        return CheckCollisionPointPoly(point, vertices.data(), (int)vertices.size());
+    }
+
+    return false;
 }
 
 // ═══════════════════════════════════════════════
 //  Constructor / Destructor
 // ═══════════════════════════════════════════════
 
-Simulation::Simulation() : paused(false), showInfo(true) {
+Simulation::Simulation() : paused(false), showInfo(true), draggedBody(nullptr), draggedBodyOldStatic(false) {
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Simulador de Corpos Rígidos :)");
     SetTargetFPS(60);
     spawnStaticGround();
@@ -119,6 +140,43 @@ void Simulation::run() {
 
 void Simulation::handleInput() {
     Vector2 mouse = GetMousePosition();
+
+    // ── 1. CLIQUE INICIAL: Tenta selecionar um corpo existente ──
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        draggedBody = nullptr;
+
+        // Varre de trás para frente para selecionar o corpo que está visualmente "no topo"
+        for (int i = (int)bodies.size() - 1; i >= 0; --i) {
+            if (isPointInsideBody(mouse, bodies[i])) {
+                draggedBody = bodies[i];
+                draggedBodyOldStatic = draggedBody->getIsStatic();
+
+                // Torna temporariamente estático para parar a gravidade e forças físicas externas
+                draggedBody->setStatic(true);
+                draggedBody->setSpeed({ 0.0f, 0.0f });
+                draggedBody->setAngularSpeed(0.0f);
+                break; // Encontrou um, não precisa testar o resto
+            }
+        }
+    }
+
+    // ── 2. SEGURANDO O MOUSE: Move livremente o corpo selecionado ──
+    if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && draggedBody != nullptr) {
+        draggedBody->setPos(mouse);
+        draggedBody->setSpeed({ 0.0f, 0.0f }); // Garante que não acumule velocidade fantasma pelo movimento
+        draggedBody->setAngularSpeed(0.0f);
+    }
+
+    // ── 3. SOLTANDO O MOUSE: Devolve o corpo para a simulação física ──
+    if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT) && draggedBody != nullptr) {
+        // Restaura o estado estático original que o corpo tinha antes do clique
+        draggedBody->setStatic(draggedBodyOldStatic);
+
+        // Opcional: Se quiser que o objeto seja "arremessado" com base no movimento do mouse,
+        // você poderia calcular a velocidade aqui através do GetMouseDelta().
+
+        draggedBody = nullptr; // Limpa o ponteiro
+    }
 
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))   spawnCircle(mouse);
     if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT))  spawnRectangle(mouse);
@@ -168,43 +226,122 @@ void Simulation::applyGravity(float dt) {
 void Simulation::resolveGroundCollision(Body* body) {
     if (body->getIsStatic()) return;
 
-    if (Circumference* c = dynamic_cast<Circumference*>(body)) { //casting de um ponteiro de um objeto da classe body para classe circunferencia em tempo de execução para usar atributos da circunferencia
-        float bottom = c->getPos().y + c->getRadius();
-        if (bottom >= GROUND_Y) {
-            Vector2 p = c->getPos();
-            p.y = GROUND_Y - c->getRadius(); // só atualizo y do p, o x continua igual ao x do c.
-            c->setPos(p);
-            Vector2 v = c->getSpeed();
-            v.y = -v.y * c->getRestitution(); //teoria de colisões. Dem.: Qualquer livro de física.
-            v.x *=  1.0f - c->getFriction(); //atenção no *=
-            c->setSpeed(v);
+    // Constantes de estabilização física calibradas
+    const float slop = 0.1f;             // Tolerância permitida de penetração
+    const float velocityThreshold = 4.0f; // Aumentado ligeiramente para segurar o escorregamento
+    const float angularThreshold = 0.2f;  // Limiar para travar rotações parasitas e assentar a face
+
+    // ── CASO CÍRCULO ──
+    Circumference* circ = dynamic_cast<Circumference*>(body);
+    if (circ) {
+        float radius = circ->getRadius();
+        float depth = (body->getPos().y + radius) - GROUND_Y;
+
+        if (depth > slop) {
+            body->setPos({ body->getPos().x, body->getPos().y - (depth - slop) });
+            Vector2 r = { 0.0f, radius };
+
+            float v_contact_x = body->getSpeed().x - body->getAngularSpeed() * r.y;
+            float v_contact_y = body->getSpeed().y;
+
+            float invMass = 1.0f / body->getMass();
+            float invInertia = 1.0f / body->inertia();
+
+            float jN = 0.0f;
+            if (v_contact_y > 0) {
+                jN = -(1.0f + body->getRestitution()) * v_contact_y / invMass;
+                body->setSpeed({ body->getSpeed().x, body->getSpeed().y + jN * invMass });
+            }
+
+            v_contact_x = body->getSpeed().x - body->getAngularSpeed() * r.y;
+            float tangentMass = invMass + (r.y * r.y) * invInertia;
+            float jT = -v_contact_x / tangentMass;
+            float maxFriction = fmaxf(jN, 0.0f) * body->getFriction();
+            if (maxFriction <= 0.0f) {
+                maxFriction = body->getMass() * GRAVITY * GetFrameTime() * body->getFriction();
+            }
+            jT = fmaxf(-maxFriction, fminf(jT, maxFriction));
+
+            body->setSpeed({ body->getSpeed().x + jT * invMass, body->getSpeed().y });
+            body->setAngularSpeed(body->getAngularSpeed() + (-r.y * jT) * invInertia);
+
+            if (fabsf(body->getSpeed().x) < velocityThreshold) body->setSpeed({ 0.0f, body->getSpeed().y });
+            if (fabsf(body->getSpeed().y) < velocityThreshold) body->setSpeed({ body->getSpeed().x, 0.0f });
+            if (fabsf(body->getAngularSpeed()) < 0.05f) body->setAngularSpeed(0.0f);
         }
         return;
     }
-    if (RigidRect* r = dynamic_cast<RigidRect*>(body)) {
-        float bottom = r->getPos().y + r->getHeight() / 2.0f;
-        if (bottom >= GROUND_Y) {
-            Vector2 p = r->getPos();
-            p.y = GROUND_Y - r->getHeight() / 2.0f;
-            r->setPos(p);
-            Vector2 v = r->getSpeed();
-            v.y = -v.y * r->getRestitution();
-            v.x *=  1.0f - r->getFriction();
-            r->setSpeed(v);
+
+    // ── CASO POLÍGONOS (RigidRect e Triangle) ──
+    std::vector<Vector2> vertices = body->getVertices();
+    if (vertices.empty()) return;
+
+    // Encontrar o vértice mais profundo
+    Vector2 deepestVertex = vertices[0];
+    float maxDepth = vertices[0].y - GROUND_Y;
+
+    for (size_t i = 1; i < vertices.size(); ++i) {
+        float depth = vertices[i].y - GROUND_Y;
+        if (depth > maxDepth) {
+            maxDepth = depth;
+            deepestVertex = vertices[i];
         }
-        return;
     }
-    if (Triangle* t = dynamic_cast<Triangle*>(body)) {
-        float h      = t->getSide() * sqrtf(3.0f) / 2.0f;
-        float bottom = t->getPos().y + h / 3.0f;
-        if (bottom >= GROUND_Y) {
-            Vector2 p = t->getPos();
-            p.y = GROUND_Y - h / 3.0f;
-            t->setPos(p);
-            Vector2 v = t->getSpeed();
-            v.y = -v.y * t->getRestitution();
-            v.x *=  1.0f - t->getFriction();
-            t->setSpeed(v);
+
+    if (maxDepth > slop) {
+        // 1. Correção Posicional
+        body->setPos({ body->getPos().x, body->getPos().y - (maxDepth - slop) });
+
+        // IMPORTANTE: Calculamos o braço de alavanca com base na posição ATUALIZADA do corpo
+        Vector2 r = Vector2Subtract(deepestVertex, body->getPos());
+
+        // 2. Velocidade no ponto de contacto exato
+        float v_contact_x = body->getSpeed().x - body->getAngularSpeed() * r.y;
+        float v_contact_y = body->getSpeed().y + body->getAngularSpeed() * r.x;
+
+        float invMass = 1.0f / body->getMass();
+        float invInertia = 1.0f / body->inertia();
+
+        // ── IMPULSO NORMAL VERTICAL ──
+        float jN = 0.0f;
+        if (v_contact_y > 0.0f) {
+            float normalMass = invMass + (r.x * r.x) * invInertia;
+            jN = -(1.0f + body->getRestitution()) * v_contact_y / normalMass;
+
+            body->setSpeed({ body->getSpeed().x, body->getSpeed().y + jN * invMass });
+            body->setAngularSpeed(body->getAngularSpeed() + (r.x * jN) * invInertia);
+        }
+
+        // Recalcular a velocidade de contacto horizontal após o impulso vertical
+        v_contact_x = body->getSpeed().x - body->getAngularSpeed() * r.y;
+
+        // ── IMPULSO TANGENCIAL (ATRITO) ──
+        float tangentMass = invMass + (r.y * r.y) * invInertia;
+        float jT = -v_contact_x / tangentMass;
+
+        float maxFriction = fmaxf(jN, 0.0f) * body->getFriction();
+        if (maxFriction <= 0.0f) {
+            // Se já estiver no chão a deslizar, simulamos o peso normal (Massa * Gravidade * dt)
+            maxFriction = body->getMass() * GRAVITY * GetFrameTime() * body->getFriction();
+        }
+        jT = fmaxf(-maxFriction, fminf(jT, maxFriction));
+
+        body->setSpeed({ body->getSpeed().x + jT * invMass, body->getSpeed().y });
+        body->setAngularSpeed(body->getAngularSpeed() + (-r.y * jT) * invInertia);
+
+        // ── FILTRO EXTRA PARA EVITAR DESLIZAMENTO INFINITO (ESTABILIZAÇÃO DE FACE) ──
+        // Se a velocidade linear e a rotação forem muito baixas, paramos o escorregamento
+        // e ajudamos o polígono a assentar a sua face de forma firme no chão.
+        if (fabsf(body->getSpeed().x) < velocityThreshold) {
+            body->setSpeed({ 0.0f, body->getSpeed().y });
+        }
+        if (fabsf(body->getSpeed().y) < velocityThreshold) {
+            body->setSpeed({ body->getSpeed().x, 0.0f });
+        }
+
+        // Se a rotação for minúscula, mata o balanço residual, impedindo-o de ficar equilibrado num vértice
+        if (fabsf(body->getAngularSpeed()) < angularThreshold) {
+            body->setAngularSpeed(0.0f);
         }
     }
 }
@@ -274,124 +411,193 @@ CollisionInfo Simulation::detectCircleCircle(Circumference* a, Circumference* b)
     return info;
 }
 
-CollisionInfo Simulation::detectCirclePoly(Circumference* c,
-                                            const std::vector<Vector2>& poly) {
+CollisionInfo Simulation::detectCirclePoly(Circumference* c, const std::vector<Vector2>& poly) {
     CollisionInfo info;
-    info.depth = std::numeric_limits<float>::max();
+    info.colliding = false;
+    info.depth = FLT_MAX;
+    info.normal = { 0.0f, 0.0f };
 
-    // eixos das arestas do polígono
-    auto axes = polyAxes(poly);
+    size_t count = poly.size();
+    if (count == 0) return info;
 
-    // eixo extra: do vértice mais próximo ao centro do círculo
-    float bestDist = std::numeric_limits<float>::max();
-    Vector2 closest = poly[0];
-    for (auto& v : poly) {
-        float d = (c->getPos().x-v.x)*(c->getPos().x-v.x)
-                + (c->getPos().y-v.y)*(c->getPos().y-v.y);
-        if (d < bestDist) { bestDist = d; closest = v; }
+    Vector2 circleCenter = c->getPos();
+    float circleRadius = c->getRadius();
+
+    std::vector<Vector2> axes;
+
+    // 1. ADICIONA AS NORMAIS DAS FACES DO POLÍGONO COMO EIXOS
+    for (size_t i = 0; i < count; ++i) {
+        Vector2 p1 = poly[i];
+        Vector2 p2 = poly[(i + 1) % count];
+        Vector2 edge = Vector2Subtract(p2, p1);
+        Vector2 normal = { -edge.y, edge.x }; // Perpendicular
+        axes.push_back(Vector2Normalize(normal));
     }
-    axes.push_back(v2Norm({c->getPos().x - closest.x,
-                           c->getPos().y - closest.y}));
 
-    for (auto& axis : axes) {
-        if (axis.x == 0.0f && axis.y == 0.0f) continue;
-        float minC, maxC, minP, maxP;
-        projectCircle(c->getPos(), c->getRadius(), axis, minC, maxC);
-        projectPoly(poly, axis, minP, maxP);
+    // 2. ENCONTRA O VÉRTICE MAIS PRÓXIMO DO CÍRCULO E ADICIONA COMO EIXO DE TESTE
+    // (Crucial para quando o círculo bate exatamente na quina de um quadrado)
+    Vector2 closestVertex = poly[0];
+    float minDstSq = Vector2DistanceSqr(circleCenter, poly[0]);
 
-        if (maxC < minP || maxP < minC) {
-            info.colliding = false;
-            return info;
+    for (size_t i = 1; i < count; ++i) {
+        float dstSq = Vector2DistanceSqr(circleCenter, poly[i]);
+        if (dstSq < minDstSq) {
+            minDstSq = dstSq;
+            closestVertex = poly[i];
         }
-        float overlap = std::min(maxC, maxP) - std::max(minC, minP);
+    }
+
+    Vector2 axisToVertex = Vector2Subtract(closestVertex, circleCenter);
+    if (Vector2LengthSqr(axisToVertex) > 0.0f) {
+        axes.push_back(Vector2Normalize(axisToVertex));
+    }
+
+    // 3. TESTA TODOS OS EIXOS USANDO O SAT
+    for (Vector2 axis : axes) {
+        float minA, maxA;
+        float minB, maxB;
+
+        // Projeta o polígono usando a função que você já possui
+        projectPoly(poly, axis, minA, maxA);
+        // Projeta o círculo
+        projectCircle(circleCenter, circleRadius, axis, minB, maxB);
+
+        // Se houver uma lacuna (gap) em qualquer eixo, NÃO há colisão
+        if (maxA < minB || maxB < minA) {
+            return CollisionInfo();
+        }
+
+        // Calcula a profundidade da sobreposição neste eixo
+        float overlap = fminf(maxA, maxB) - fmaxf(minA, minB);
+
+        // Queremos armazenar a menor penetração geométrica
         if (overlap < info.depth) {
-            info.depth  = overlap;
+            info.depth = overlap;
             info.normal = axis;
         }
     }
+
+    // Se passou por todos os eixos, a colisão é real
     info.colliding = true;
+
+    // Garante que a normal aponte consistentemente na perspectiva correta (de A para B)
+    // Na assinatura padrão de detectCollision: A costuma ser o Círculo e B o Polígono
+    // Vamos garantir que a normal aponte do centro do círculo para o centro do polígono
+    Vector2 polyCenter = { 0.0f, 0.0f };
+    for (const auto& v : poly) {
+        polyCenter = Vector2Add(polyCenter, v);
+    }
+    polyCenter = Vector2Scale(polyCenter, 1.0f / count);
+
+    Vector2 dirCircleToPoly = Vector2Subtract(polyCenter, circleCenter);
+    if (Vector2DotProduct(dirCircleToPoly, info.normal) < 0.0f) {
+        info.normal = Vector2Scale(info.normal, -1.0f);
+    }
+
     return info;
 }
 
-CollisionInfo Simulation::detectPolyPoly(const std::vector<Vector2>& A,
-                                          const std::vector<Vector2>& B) {
+CollisionInfo Simulation::detectPolyPoly(const std::vector<Vector2>& A, const std::vector<Vector2>& B) {
     CollisionInfo info;
-    info.depth = std::numeric_limits<float>::max();
+    info.colliding = false;
+    info.depth = FLT_MAX;
+    info.normal = { 0.0f, 0.0f };
 
-    // testa eixos de A e depois de B
-    for (int pass = 0; pass < 2; pass++) {
-        const auto& src = (pass == 0) ? A : B;
-        for (auto& axis : polyAxes(src)) {
-            float minA, maxA, minB, maxB;
-            projectPoly(A, axis, minA, maxA);
-            projectPoly(B, axis, minB, maxB);
+    size_t countA = A.size();
+    size_t countB = B.size();
 
-            if (maxA < minB || maxB < minA) {
-                info.colliding = false;
-                return info;
-            }
-            float overlap = std::min(maxA, maxB) - std::max(minA, minB);
-            if (overlap < info.depth) {
-                info.depth  = overlap;
-                info.normal = axis;
-            }
+    std::vector<Vector2> axes;
+
+    // Eixos do Polígono A
+    for (size_t i = 0; i < countA; ++i) {
+        Vector2 p1 = A[i];
+        Vector2 p2 = A[(i + 1) % countA];
+        Vector2 edge = Vector2Subtract(p2, p1);
+        Vector2 normal = { -edge.y, edge.x };
+        axes.push_back(Vector2Normalize(normal));
+    }
+
+    // Eixos do Polígono B
+    for (size_t i = 0; i < countB; ++i) {
+        Vector2 p1 = B[i];
+        Vector2 p2 = B[(i + 1) % countB];
+        Vector2 edge = Vector2Subtract(p2, p1);
+        Vector2 normal = { -edge.y, edge.x };
+        axes.push_back(Vector2Normalize(normal));
+    }
+
+    // Testar todos os eixos usando SAT
+    for (Vector2 axis : axes) {
+        float minA, maxA;
+        float minB, maxB;
+
+        // Chamada atualizada para projectPoly
+        projectPoly(A, axis, minA, maxA);
+        projectPoly(B, axis, minB, maxB);
+
+        // Se houver uma lacuna (gap), não há colisão
+        if (maxA < minB || maxB < minA) {
+            return CollisionInfo();
+        }
+
+        float overlap = fminf(maxA, maxB) - fmaxf(minA, minB);
+
+        if (overlap < info.depth) {
+            info.depth = overlap;
+            info.normal = axis;
         }
     }
+
     info.colliding = true;
+
+    // Garante a direção correta da normal (de A para B)
+    Vector2 centerA = { 0, 0 };
+    Vector2 centerB = { 0, 0 };
+    for (const auto& v : A) { centerA = Vector2Add(centerA, v); }
+    for (const auto& v : B) { centerB = Vector2Add(centerB, v); }
+    centerA = Vector2Scale(centerA, 1.0f / countA);
+    centerB = Vector2Scale(centerB, 1.0f / countB);
+
+    Vector2 dirAtoB = Vector2Subtract(centerB, centerA);
+    if (Vector2DotProduct(dirAtoB, info.normal) < 0.0f) {
+        info.normal = Vector2Scale(info.normal, -1.0f);
+    }
+
     return info;
 }
 
 CollisionInfo Simulation::detectCollision(Body* A, Body* B) {
-    CollisionInfo info;
+    // 1. CASO: Circunferência vs Circunferência
+    Circumference* circA = dynamic_cast<Circumference*>(A);
+    Circumference* circB = dynamic_cast<Circumference*>(B);
+    if (circA && circB) {
+        return detectCircleCircle(circA, circB);
+    }
 
-    Circumference* ca = dynamic_cast<Circumference*>(A);
-    Circumference* cb = dynamic_cast<Circumference*>(B);
-    RigidRect*     ra = dynamic_cast<RigidRect*>(A);
-    RigidRect*     rb = dynamic_cast<RigidRect*>(B);
-    Triangle*      ta = dynamic_cast<Triangle*>(A);
-    Triangle*      tb = dynamic_cast<Triangle*>(B);
+    // 2. CASO: Polígono vs Polígono (Quadrado vs Quadrado, Triângulo vs Triângulo, Quadrado vs Triângulo)
+    // Se nenhum deles for uma circunferência, tratamo-los a ambos como polígonos genéricos via SAT
+    if (!circA && !circB) {
+        return detectPolyPoly(A->getVertices(), B->getVertices());
+    }
 
-    // ── Círculo vs Círculo ───────────────────────
-    if (ca && cb)
-        return detectCircleCircle(ca, cb);
+    // 3. CASO: Circunferência vs Polígono (Quadrado ou Triângulo)
+    if (circA && !circB) {
+        // A é círculo, B é polígono (RigidRect ou Triangle)
+        return detectCirclePoly(circA, B->getVertices());
+    }
 
-    // ── Círculo vs Retângulo ─────────────────────
-    if (ca && rb)
-        return detectCirclePoly(ca, rectVerts(rb));
+    if (circB && !circA) {
+        // B é círculo, A é polígono (RigidRect ou Triangle)
+        CollisionInfo info = detectCirclePoly(circB, A->getVertices());
 
-    if (ra && cb) {
-        info = detectCirclePoly(cb, rectVerts(ra));
-        // normal precisa apontar de A para B
-        info.normal = {-info.normal.x, -info.normal.y};
+        // CRUCIAL: Como a função detectCirclePoly calcula a normal de círculo->polígono,
+        // e aqui invertemos a ordem dos fatores (A é polígono e B é círculo),
+        // precisamos de inverter a normal para manter a convenção global de "A para B".
+        info.normal = Vector2Scale(info.normal, -1.0f);
         return info;
     }
 
-    // ── Círculo vs Triângulo ─────────────────────
-    if (ca && tb)
-        return detectCirclePoly(ca, triVerts(tb));
-
-    if (ta && cb) {
-        info = detectCirclePoly(cb, triVerts(ta));
-        info.normal = {-info.normal.x, -info.normal.y};
-        return info;
-    }
-
-    // ── Retângulo vs Retângulo ───────────────────
-    if (ra && rb)
-        return detectPolyPoly(rectVerts(ra), rectVerts(rb));
-
-    // ── Retângulo vs Triângulo ───────────────────
-    if (ra && tb)
-        return detectPolyPoly(rectVerts(ra), triVerts(tb));
-
-    if (ta && rb)
-        return detectPolyPoly(triVerts(ta), rectVerts(rb));
-
-    // ── Triângulo vs Triângulo ───────────────────
-    if (ta && tb)
-        return detectPolyPoly(triVerts(ta), triVerts(tb));
-
-    return info;
+    return CollisionInfo(); // Sem colisão por predefinição
 }
 
 // ═══════════════════════════════════════════════
@@ -399,55 +605,99 @@ CollisionInfo Simulation::detectCollision(Body* A, Body* B) {
 // ═══════════════════════════════════════════════
 
 void Simulation::applyImpulse(Body* A, Body* B, const CollisionInfo& info) {
-    float invMassA = A->getIsStatic() ? 0.0f : 1.0f / A->getMass();
-    float invMassB = B->getIsStatic() ? 0.0f : 1.0f / B->getMass();
-    float totalInv = invMassA + invMassB;
-    if (totalInv < 1e-8f) return;
+    if (A->getIsStatic() && B->getIsStatic()) return;
 
-    // garantir que a normal aponta de A para B
-    Vector2 dir = { B->getPos().x - A->getPos().x,
-                    B->getPos().y - A->getPos().y };
-    Vector2 n   = info.normal;
-    if (v2Dot(dir, n) < 0) n = {-n.x, -n.y};
+    float invMassA = A->getIsStatic() ? 0.0f : (1.0f / A->getMass());
+    float invMassB = B->getIsStatic() ? 0.0f : (1.0f / B->getMass());
 
-    // ── separar corpos (correção posicional) ─────
-    float corrX = n.x * info.depth / totalInv;
-    float corrY = n.y * info.depth / totalInv;
+    // ── STEP 1: CORREÇÃO POSICIONAL SEVERA (Impede o encaixe/afundamento em pilhas) ──
+    // Aumentamos o percent para 0.65f (65% da penetração resolvida instantaneamente por frame)
+    // Reduzimos o slop para 0.01f para deixar os encaixes imperceptíveis e bem justos
+    const float percent = 0.65f;
+    const float slop = 0.01f;
+
+    float correctionMagnitude = fmaxf(info.depth - slop, 0.0f) / (invMassA + invMassB) * percent;
+    Vector2 correctionVector = Vector2Scale(info.normal, correctionMagnitude);
+
+    if (!A->getIsStatic()) A->setPos(Vector2Subtract(A->getPos(), Vector2Scale(correctionVector, invMassA)));
+    if (!B->getIsStatic()) B->setPos(Vector2Add(B->getPos(), Vector2Scale(correctionVector, invMassB)));
+
+    // ── STEP 2: CÁLCULO DE IMPACTO LINEAR E ANGULAR ──
+    // Encontra o ponto médio da colisão baseado na profundidade real para melhor torque em pilhas
+    Vector2 contactPoint = Vector2Lerp(A->getPos(), B->getPos(), 0.5f);
+
+    Vector2 rA = Vector2Subtract(contactPoint, A->getPos());
+    Vector2 rB = Vector2Subtract(contactPoint, B->getPos());
+
+    Vector2 vA_contact = { A->getSpeed().x - A->getAngularSpeed() * rA.y,
+                           A->getSpeed().y + A->getAngularSpeed() * rA.x };
+    Vector2 vB_contact = { B->getSpeed().x - B->getAngularSpeed() * rB.y,
+                           B->getSpeed().y + B->getAngularSpeed() * rB.x };
+
+    Vector2 relVel = Vector2Subtract(vB_contact, vA_contact);
+    float velAlongNormal = Vector2DotProduct(relVel, info.normal);
+
+    // Se eles já estão se separando na velocidade linear, ignora
+    if (velAlongNormal > 0.0f) return;
+
+    float e = fminf(A->getRestitution(), B->getRestitution());
+
+    // Para pilhas estáveis, se a velocidade de impacto for muito baixa, zeramos a restituição (e = 0)
+    // Isso evita que caixas na base da pilha fiquem quicando microscopicamente para sempre
+    if (fabsf(velAlongNormal) < 20.0f) {
+        e = 0.0f;
+    }
+
+    auto CrossProduct2D = [](Vector2 v1, Vector2 v2) { return v1.x * v2.y - v1.y * v2.x; };
+
+    float rA_cross_N = CrossProduct2D(rA, info.normal);
+    float rB_cross_N = CrossProduct2D(rB, info.normal);
+
+    float invInertiaA = A->getIsStatic() ? 0.0f : (1.0f / A->inertia());
+    float invInertiaB = B->getIsStatic() ? 0.0f : (1.0f / B->inertia());
+
+    float totalInverseMass = invMassA + invMassB +
+                             (rA_cross_N * rA_cross_N) * invInertiaA +
+                             (rB_cross_N * rB_cross_N) * invInertiaB;
+
+    float impulseScalar = -(1.0f + e) * velAlongNormal / totalInverseMass;
+    Vector2 impulse = Vector2Scale(info.normal, impulseScalar);
 
     if (!A->getIsStatic()) {
-        Vector2 p = A->getPos();
-        p.x -= corrX * invMassA;
-        p.y -= corrY * invMassA;
-        A->setPos(p);
+        A->setSpeed(Vector2Subtract(A->getSpeed(), Vector2Scale(impulse, invMassA)));
+        float torqueA = CrossProduct2D(rA, Vector2Scale(impulse, -1.0f));
+        A->setAngularSpeed(A->getAngularSpeed() + torqueA * invInertiaA);
     }
     if (!B->getIsStatic()) {
-        Vector2 p = B->getPos();
-        p.x += corrX * invMassB;
-        p.y += corrY * invMassB;
-        B->setPos(p);
+        B->setSpeed(Vector2Add(B->getSpeed(), Vector2Scale(impulse, invMassB)));
+        float torqueB = CrossProduct2D(rB, impulse);
+        B->setAngularSpeed(B->getAngularSpeed() + torqueB * invInertiaB);
     }
 
-    // ── impulso ──────────────────────────────────
-    Vector2 relVel = { B->getSpeed().x - A->getSpeed().x,
-                       B->getSpeed().y - A->getSpeed().y };
-    float relVelN = v2Dot(relVel, n);
+    // ── STEP 3: ATRITO LATERAL (ESSENCIAL PARA TRAVAR A PILHA LATERALMENTE) ──
+    Vector2 tangent = { -info.normal.y, info.normal.x };
+    float velAlongTangent = Vector2DotProduct(relVel, tangent);
 
-    if (relVelN > 0) return;  // já se afastando
+    float rA_cross_T = CrossProduct2D(rA, tangent);
+    float rB_cross_T = CrossProduct2D(rB, tangent);
+    float tangentShared = invMassA + invMassB +
+                          (rA_cross_T * rA_cross_T) * invInertiaA +
+                          (rB_cross_T * rB_cross_T) * invInertiaB;
 
-    float e = (A->getRestitution() + B->getRestitution()) / 2.0f;
-    float j = -(1.0f + e) * relVelN / totalInv;
+    float frictionScalar = -velAlongTangent / tangentShared;
+
+    float mu = (A->getFriction() + B->getFriction()) / 2.0f;
+    frictionScalar = fmaxf(-impulseScalar * mu, fminf(frictionScalar, impulseScalar * mu));
+
+    Vector2 frictionImpulse = Vector2Scale(tangent, frictionScalar);
 
     if (!A->getIsStatic()) {
-        Vector2 v = A->getSpeed();
-        v.x -= (j * invMassA) * n.x;
-        v.y -= (j * invMassA) * n.y;
-        A->setSpeed(v);
+        A->setSpeed(Vector2Subtract(A->getSpeed(), Vector2Scale(frictionImpulse, invMassA)));
+        A->setAngularSpeed(A->getAngularSpeed() + CrossProduct2D(rA, Vector2Scale(frictionImpulse, -1.0f)) * invInertiaA);
     }
     if (!B->getIsStatic()) {
-        Vector2 v = B->getSpeed();
-        v.x += (j * invMassB) * n.x;
-        v.y += (j * invMassB) * n.y;
-        B->setSpeed(v);
+        B->setSpeed(Vector2Add(B->getSpeed(), Vector2Scale(frictionImpulse, invMassB)));
+        B->setAngularSpeed(B->getAngularSpeed() + CrossProduct2D(rB, frictionImpulse) * invInertiaB);
     }
 }
 

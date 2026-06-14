@@ -8,6 +8,8 @@ protected:
     Vector2 pos;
     Vector2 speed;
     Vector2 accel;
+    float angle;
+    float angularSpeed;
     float mass;
     float restitution;
     float friction;
@@ -23,10 +25,13 @@ public:
     virtual void  draw()    const = 0;
     virtual float area()    const = 0;
     virtual float inertia() const = 0;
+    virtual std::vector<Vector2> getVertices() const;
 
     Vector2 getPos()         const;
     Vector2 getSpeed()       const;
     Vector2 getAccel()       const;
+    float   getAngle()       const;
+    float   getAngularSpeed()  const;
     float   getMass()        const;
     float   getRestitution() const;
     float   getFriction()    const;
@@ -35,6 +40,8 @@ public:
     void setPos(Vector2 p);
     void setSpeed(Vector2 v);
     void setAccel(Vector2 a);
+    void setAngle(float a);
+    void setAngularSpeed(float w);
     void setStatic(bool s);
 };
 
@@ -66,6 +73,7 @@ public:
     float inertia() const override;
     float getWidth()  const;
     float getHeight() const;
+    std::vector<Vector2> getVertices() const;
 };
 
 
@@ -80,6 +88,7 @@ public:
     float area()    const override;
     float inertia() const override;
     float getSide() const;
+    std::vector<Vector2> getVertices() const;
 };
 
 #endif // BODY_H_INCLUDED
