@@ -42,7 +42,7 @@ static std::vector<Vector2> polyAxes(const std::vector<Vector2>& v) {
     return axes;
 }
 
-=static void projectPoly(const std::vector<Vector2>& vtx, Vector2 axis, float& minProj, float& maxProj) {
+static void projectPoly(const std::vector<Vector2>& vtx, Vector2 axis, float& minProj, float& maxProj) {
     minProj = Vector2DotProduct(vtx[0], axis);
     maxProj = minProj;
     for (size_t i = 1; i < vtx.size(); ++i) {
@@ -52,7 +52,7 @@ static std::vector<Vector2> polyAxes(const std::vector<Vector2>& v) {
     }
 }
 
-=static void projectCircle(Vector2 center, float radius, Vector2 axis, float& minProj, float& maxProj) {
+static void projectCircle(Vector2 center, float radius, Vector2 axis, float& minProj, float& maxProj) {
     float projection = Vector2DotProduct(center, axis);
     minProj = projection - radius;
     maxProj = projection + radius;
@@ -189,7 +189,6 @@ void Simulation::resolveGroundCollision(Body* body) {
     float speedThreshold = 4.0f;
     float angularThreshold = 0.3f;
 
-    // ── CASO CÍRCULO ──
     Circumference* circ = dynamic_cast<Circumference*>(body);
     if (circ) {
         slop = 0.1f;
