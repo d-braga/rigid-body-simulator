@@ -4,10 +4,6 @@ inline float CrossProduct2D(Vector2 a, Vector2 b) {
     return a.x * b.y - a.y * b.x;
 }
 
-// ─────────────────────────────────────────
-//  Body
-// ─────────────────────────────────────────
-
 Body::Body(Vector2 pos, float mass, float restitution, float friction, bool isStatic)
     : pos(pos), speed({0,0}), accel({0,0}), angle(0), angularSpeed(0),
       mass(mass), restitution(restitution),
@@ -21,7 +17,7 @@ void Body::update(float dt) {
     pos.y   += speed.y * dt;
     angle += angularSpeed * dt;
     angularSpeed *= 0.98f;
-    accel = {0, 0};
+    accel = {0,0};
 }
 
 void Body::applyForce(Vector2 force) {
@@ -56,7 +52,6 @@ void Circumference::draw() const {
     DrawCircleV(pos, radius, RED);
     Vector2 edge = { pos.x + cosf(angle) * radius, pos.y + sinf(angle) * radius };
     DrawLineV(pos, edge, BLACK);
-//    DrawCircleV(pos, radius, RED);
 }
 
 float Circumference::area() const {
@@ -80,22 +75,18 @@ std::vector<Vector2> RigidRect::getVertices() const {
 
     float hw = width / 2.0f;
     float hh = height / 2.0f;
-
-    // 4 Cantos locais (relativos ao centro do quadrado)
     Vector2 localVertices[4] = {
-        { -hw, -hh }, // Superior Esquerdo
-        {  hw, -hh }, // Superior Direito
-        {  hw,  hh }, // Inferior Direito
-        { -hw,  hh }  // Inferior Esquerdo
+        { -hw, -hh },
+        {  hw, -hh },
+        {  hw,  hh },
+        { -hw,  hh }
     };
 
     float cosA = cosf(angle);
     float sinA = sinf(angle);
 
-    // Aplica a matriz de rotação 2D e translada para a posição do mundo
     for (int i = 0; i < 4; i++) {
-        vertices[i].x = pos.x + (localVertices[i].x * cosA - localVertices[i].x * sinA); // correção de index aqui abaixo
-        // Correção matemática padrão:
+        vertices[i].x = pos.x + (localVertices[i].x * cosA - localVertices[i].x * sinA);
         vertices[i].x = pos.x + (localVertices[i].x * cosA - localVertices[i].y * sinA);
         vertices[i].y = pos.y + (localVertices[i].x * sinA + localVertices[i].y * cosA);
     }
@@ -107,7 +98,6 @@ void RigidRect::draw() const {
     Rectangle rect = { pos.x, pos.y, width, height };
     Vector2 origin = { width / 2.0f, height / 2.0f }; // Centro de rotação
     DrawRectanglePro(rect, origin, angle * RAD2DEG, cor);
-//    DrawRectangleV({pos.x - width/2, pos.y - height/2}, {width, height}, this->cor);
 }
 
 float RigidRect::area() const {
@@ -121,11 +111,6 @@ float RigidRect::inertia() const {
 float RigidRect::getWidth()  const { return width; }
 float RigidRect::getHeight() const { return height; }
 
-
-// ─────────────────────────────────────────
-//  Triangle
-// ─────────────────────────────────────────
-
 Triangle::Triangle(Vector2 pos, float side, float mass,
                    float restitution, float friction, bool isStatic)
     : Body(pos, mass, restitution, friction, isStatic), side(side) {}
@@ -138,14 +123,12 @@ void Triangle::draw() const {
 std::vector<Vector2> Triangle::getVertices() const {
     std::vector<Vector2> vertices(3);
 
-    // Altura de um triângulo equilátero
     float h = side * sqrtf(3.0f) / 2.0f;
 
-    // Centro geométrico (Centroide) divide a altura em 2/3 para o topo e 1/3 para a base
     Vector2 localVertices[3] = {
-        { 0.0f, -h * (2.0f / 3.0f) },          // Topo
-        { -side / 2.0f, h * (1.0f / 3.0f) },   // Inferior Esquerdo
-        {  side / 2.0f, h * (1.0f / 3.0f) }    // Inferior Direito
+        { 0.0f, -h * (2.0f / 3.0f) },
+        { -side / 2.0f, h * (1.0f / 3.0f) },
+        {  side / 2.0f, h * (1.0f / 3.0f) }
     };
 
     float cosA = cosf(angle);

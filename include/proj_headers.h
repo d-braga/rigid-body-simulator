@@ -6,4 +6,4 @@
 #include "raymath.h"
 #include "rlgl.h"
 
-#endif // PROJ_HEADERS_H_INCLUDED
+#endif
